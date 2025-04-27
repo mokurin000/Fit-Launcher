@@ -27,7 +27,7 @@
   },
   "productName": "Fit Launcher",
   "mainBinaryName": "Fit Launcher",
-  "version": "2.2.0",
+  "version": "2.3.0-rc.1",
   "identifier": "com.fitlauncher.carrotrub",
   "plugins": {
     "updater": {
@@ -55,7 +55,6 @@
         ],
         "enable": true
       },
-      
       "csp": {
         "default-src": "'self' customprotocol: asset: 'unsafe-inline'",
         "script-src": "'wasm-unsafe-eval'",
