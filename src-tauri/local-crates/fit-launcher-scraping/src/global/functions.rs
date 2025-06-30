@@ -245,7 +245,7 @@ async fn scrape_popular_game(link: &str) -> Result<Game, ScrapingError> {
             let text = p.text().collect::<String>();
             if text.trim_start().starts_with("Genres/Tags:") {
                 Some(
-                    p.select(&scraper::Selector::parse("a").unwrap())
+                    p.select(&scraper::Selector::parse("a:not(:first-child)").unwrap())
                         .map(|a| a.text().collect::<String>())
                         .collect::<Vec<_>>()
                         .join(", "),
