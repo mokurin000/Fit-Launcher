@@ -1,22 +1,18 @@
 use anyhow::Result;
 use fit_launcher_config::client::dns::CUSTOM_DNS_CLIENT;
 use futures::{StreamExt, stream::FuturesOrdered};
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
-use tauri::{Emitter, Manager};
+use std::time::{Duration, Instant};
+use tauri::{Emitter, Manager, async_runtime::spawn_blocking};
 use tokio::{
     fs,
     io::{AsyncWriteExt, BufWriter},
-    task::LocalSet,
     time::timeout,
 };
 use tracing::{error, info};
 
 use crate::{
     errors::{CreatingFileErrorStruct, ScrapingError},
-    global::functions::helper::{fetch_game_info, find_preview_image},
+    global::functions::helper::{fetch_game_info, find_preview_image, try_high_resolution},
     structs::Game,
 };
 
@@ -179,15 +175,24 @@ pub async fn scraping_func(app_handle: tauri::AppHandle) -> Result<(), Box<Scrap
 
 async fn scrape_popular_game(link: &str, app: &tauri::AppHandle) -> Result<Game, ScrapingError> {
     let body = fetch_page(link, app).await?;
-    let doc = scraper::Html::parse_document(&body);
-    let article = doc
-        .select(&scraper::Selector::parse("article").unwrap())
-        .next()
-        .ok_or(ScrapingError::ArticleNotFound(link.into()))?;
+    let link = link.to_string();
+    let game = spawn_blocking(move || {
+        let doc = scraper::Html::parse_document(&body);
+        let article = doc
+            .select(&scraper::Selector::parse("article").unwrap())
+            .next()
+            .ok_or(ScrapingError::ArticleNotFound(link.into()))?;
+        let img = find_preview_image(article).unwrap_or_default();
 
-    let game = fetch_game_info(article);
+        Result::<_, ScrapingError>::Ok(Game {
+            img,
+            ..fetch_game_info(article)
+        })
+    })
+    .await
+    .unwrap()?;
     Ok(Game {
-        img: find_preview_image(article).await.unwrap_or_default(),
+        img: try_high_resolution(&game.img).await,
         ..game
     })
 }
@@ -197,14 +202,17 @@ pub async fn popular_games_scraping_func(
 ) -> Result<(), Box<ScrapingError>> {
     let start = Instant::now();
     let body = fetch_page("https://fitgirl-repacks.site/popular-repacks/", &app_handle).await?;
-    let doc = scraper::Html::parse_document(&body);
+    let links = spawn_blocking(move || {
+        let doc = scraper::Html::parse_document(&body);
 
-    let links = doc
-        .select(&scraper::Selector::parse(".widget-grid-view-image > a").unwrap())
-        .filter_map(|e| e.value().attr("href"))
-        .take(8)
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
+        doc.select(&scraper::Selector::parse(".widget-grid-view-image > a").unwrap())
+            .filter_map(|e| e.value().attr("href"))
+            .take(8)
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap();
 
     let games = FuturesOrdered::from_iter(
         links
@@ -284,28 +292,21 @@ pub async fn recently_updated_games_scraping_func(
     Ok(())
 }
 
-pub async fn run_all_scrapers(app_handle: Arc<tauri::AppHandle>) -> anyhow::Result<()> {
+pub async fn run_all_scrapers(app: tauri::AppHandle) -> anyhow::Result<()> {
     let start = Instant::now();
-    // We need LocalSet because scraper’s HTML nodes aren’t Send.
-    let local = LocalSet::new();
-    let app = app_handle.clone();
+    async {
+        let a = tokio::task::spawn(scraping_func(app.clone()));
+        let b = tokio::task::spawn(popular_games_scraping_func(app.clone()));
+        let c = tokio::task::spawn(recently_updated_games_scraping_func(app.clone()));
 
-    local
-        .run_until(async {
-            let a = tokio::task::spawn_local(scraping_func(app.as_ref().clone()));
-            let b = tokio::task::spawn_local(popular_games_scraping_func(app.as_ref().clone()));
-            let c = tokio::task::spawn_local(recently_updated_games_scraping_func(
-                app.as_ref().clone(),
-            ));
-
-            // if one fails we still await the others
-            let (ra, rb, rc) = tokio::join!(a, b, c);
-            ra??;
-            rb??;
-            rc??;
-            Ok::<_, anyhow::Error>(())
-        })
-        .await?;
+        // if one fails we still await the others
+        let (ra, rb, rc) = tokio::join!(a, b, c);
+        ra??;
+        rb??;
+        rc??;
+        Ok::<_, anyhow::Error>(())
+    }
+    .await?;
 
     info!("ALL scrapers done in {:?}", start.elapsed());
     Ok(())

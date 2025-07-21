@@ -345,42 +345,29 @@ async fn start() {
 
             // Clone the app handle for use in async tasks
             let first_app_handle = current_app_handle.clone();
-            let _second_app_handle = current_app_handle.clone();
-            let _third_app_handle = current_app_handle.clone();
+            let second_app_handle = current_app_handle.clone();
             let fourth_app_handle = current_app_handle.clone();
 
             // Perform asynchronous initialization tasks without blocking the main thread
             tauri::async_runtime::spawn(async move {
                 tracing::info!("Starting async tasks");
 
-                tauri::async_runtime::spawn_blocking({
-                    move || {
-                        // Jump back into the async runtime on _this_ blocking thread.
-                        tokio::runtime::Handle::current().block_on(async {
-                            if let Err(e) = get_100_games_unordered(first_app_handle.clone()).await
-                            {
-                                tracing::error!("run_all_scrapers failed: {e}");
-                            }
-                        });
+                tauri::async_runtime::spawn(async move {
+                    if let Err(e) = get_100_games_unordered(second_app_handle).await {
+                        tracing::error!("run_all_scrapers failed: {e}");
                     }
                 });
 
-                let scraper_handle = tauri::async_runtime::spawn_blocking({
-                    let app = first_app_handle.clone();
-                    move || {
-                        // Jump back into the async runtime on _this_ blocking thread.
-                        tokio::runtime::Handle::current().block_on(async {
-                            if let Err(e) = run_all_scrapers(Arc::new(app)).await {
-                                tracing::error!("run_all_scrapers failed: {e}");
-                            }
-                        });
+                let scraper_handle = tauri::async_runtime::spawn(async move {
+                    if let Err(e) = run_all_scrapers(first_app_handle).await {
+                        tracing::error!("run_all_scrapers failed: {e}");
                     }
                 });
 
                 // ── task B: get_sitemaps_website (already blocking) ───
-                let sitemap_handle = tauri::async_runtime::spawn_blocking({
-                    let h = fourth_app_handle.clone();
-                    move || match get_sitemaps_website(h.clone()) {
+                let sitemap_handle = tauri::async_runtime::spawn(async move {
+                    let h = fourth_app_handle;
+                    match get_sitemaps_website(h.clone()) {
                         Err(e) => {
                             tracing::error!("get_sitemaps_website: {e}");
                         }
