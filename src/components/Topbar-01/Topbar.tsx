@@ -5,6 +5,7 @@ import Searchbar from "./Topbar-Components-01/Searchbar-01/Searchbar";
 import { listen } from "@tauri-apps/api/event";
 import { TorrentApi } from "../../api/bittorrent/api";
 import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
+import createBasicChoicePopup from "../../Pop-Ups/Basic-Choice-PopUp/Basic-Choice-PopUp";
 
 export default function Topbar() {
   const [isDialogOpen, setIsDialogOpen] = createSignal(false);
@@ -13,12 +14,43 @@ export default function Topbar() {
   const [isFullscreen, setIsFullscreen] = createSignal(false);
   const location = useLocation();
   const isActive = (path: string) => location.pathname === path;
-  const torrentApi = new TorrentApi();
+  const [showTrayDialog, setShowTrayDialog] = createSignal(false);
+  const [canConfirmTrayDialog, setCanConfirmTrayDialog] = createSignal(false);
+
+
   const appWindow = getCurrentWebviewWindow();
 
-  function handleWindowClose() {
-    //todo: add pause all torrent
-    appWindow.hide();
+  async function handleWindowClose() {
+    const hasSeenTrayMessage = localStorage.getItem("hasSeenTrayMessage");
+    if (hasSeenTrayMessage) {
+      await appWindow.hide();
+      return;
+    }
+
+    let resolveFn: () => void;
+    const done = new Promise<void>((resolve) => {
+      resolveFn = resolve;
+    });
+
+    const [disabledConfirm, setDisabledConfirm] = createSignal(true);
+
+    setTimeout(() => {
+      setDisabledConfirm(false);
+    }, 5000);
+
+    createBasicChoicePopup({
+      infoTitle: "Heads up!",
+      infoMessage: "Fit Launcher is still running in the background.\nYou can find it in the taskbar tray.\nYou're gonna have to wait 5 seconds with me right now so you read everything but don't worry it's only a one time thing :) ",
+      disabledConfirm,
+      action: () => {
+        if (disabledConfirm()) return;
+        localStorage.setItem("hasSeenTrayMessage", "true");
+        resolveFn();
+      },
+    });
+
+    await done;
+    await appWindow.hide();
   }
 
   async function handleMaximize() {
